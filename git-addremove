@@ -1,0 +1,44 @@
+#!/bin/bash -e
+GIT=git
+
+error(){
+  echo "$@" >>/dev/stderr
+  exit 1
+}
+
+usage(){
+  echo "Usage: $(basename "$0") [-A|--add-only|-R|--remove-only|-h|--help] [<path>*]" >>/dev/stderr
+  exit 1
+}
+
+add_only=0
+rem_only=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    (-h|--help) usage;;
+    (-A|--add-only) add_only=1;;
+    (-R|--rem-only|--remove-only) rem_only=1;;
+    (*) break;;
+  esac
+done
+
+addrem(){
+  for dir; do
+    [ -d "$dir" ] || error "\`$dir' no such directory."
+  done
+
+  if [ -n "$($GIT ls-files --modified --deleted --other "$@")" ]; then
+    (( rem_only )) || $GIT add -A "$@"
+    [ -z "$($GIT ls-files --deleted "$@")" ] ||
+      (( add_only )) || $GIT ls-files -z --deleted | xargs -0 $GIT rm
+  fi
+
+  [ -n "$($GIT diff --staged "$@")" ] || echo Nothing to commit
+}
+
+if [ $# -gt 0 ]; then
+  addrem "$@"
+else
+  addrem .
+fi

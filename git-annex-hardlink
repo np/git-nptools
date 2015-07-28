@@ -1,0 +1,16 @@
+#!/bin/bash -ue
+die(){
+  echo "$@" >>/dev/stderr
+  exit 1
+}
+hardlinkfile(){
+  local file="$1"
+  [ -L "$file" ] || die "$file was expected to be a symbolic link"
+  [ -e "$file" ] || die "$file was expected to point to an existing file"
+  dest="$(readlink "$file")"
+  rm "$file"
+  ln "$dest" "$file"
+}
+for i; do
+  hardlinkfile "$i"
+done
