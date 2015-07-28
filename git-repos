@@ -1,0 +1,47 @@
+#!/bin/bash
+
+usage(){
+  echo "Usage: $0 [OPTIONS] [<root-dir>*] [ -- <command> <args>* ]" >>/dev/stderr
+  echo "Options:" >>/dev/stderr
+  echo " -0 Separate pathnames by null characters (-z|-print0|--null are aliases)" >>/dev/stderr
+  echo " -v|--verbose Be more verbose" >>/dev/stderr
+  echo "$@" >>/dev/stderr
+  exit 1
+}
+
+ROOTS=( )
+PFINDOPTS=( )
+VERBOSE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --)
+      shift
+      [ -z "$PFINDOPTS" ] || usage "Unexpected options $PFINDOPTS in the execute command mode"
+      if [ "$VERBOSE" = 0 ]; then
+        EXTRAOPTS=('-true')
+      else
+        EXTRAOPTS=('-printf' '%p\n')
+      fi
+    # find "${ROOTS[@]}" -name .git "${EXTRAOPTS[@]}" -execdir "$@" \;
+      find "${ROOTS[@]}" -name .git "${EXTRAOPTS[@]}" \( -execdir "$@" \; -o -prune \)
+    # find "${ROOTS[@]}" -name '?*.git' "${EXTRAOPTS[@]}" -exec sh -c -- cd {} '&&' "$@" \;
+      exit 0
+      ;;
+    -z|-0|-print0|--null)
+      shift
+      PFINDOPTS=("${PFINDOPTS[@]}" -print0)
+      ;;
+    -v|--verbose)
+      shift
+      VERBOSE=1
+      ;;
+    *)
+      [ -d "$1" ] || usage "\`$1' no such directory"
+      ROOTS=("${ROOTS[@]}" "$1")
+      shift
+      ;;
+  esac
+done
+
+find "${ROOTS[@]}" -name '*.git' "${PFINDOPTS[@]}"

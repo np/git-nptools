@@ -1,0 +1,259 @@
+#!/bin/bash -e
+
+# NOTES:
+# depends on git-describe-index
+
+# TODO:
+# * add switches for $origin and $master
+# * allow to merge back the derived branches (and then remove them)
+
+GIT_DIR=${GIT_DIR:-.git}
+[ -d "$GIT_DIR" ] || err 1 "No $GIT_DIR directory"
+
+origin=origin
+master=master
+diverged=diverged
+quiet=
+auto=0
+merge=0
+colored=1
+HEAD=$(git symbolic-ref -q HEAD)
+curbranch="${HEAD/refs\/heads\//}"
+
+# asking() @ https://gist.github.com/np/5107721#file-asking-sh {{{
+# Dependencies:
+#   error() @ https://gist.github.com/np/3736727#file-error-sh
+# Options:
+#   --default=no  Makes No being the default (--default=yes is the default)
+#   --no-slmenu   Do no use slmenu even if available
+# Examples:
+#   asking 'Something failed, do you still want to continue?'
+#   asking --default=yes 'Next step?'
+asking(){
+  local default_no=0
+  local fzf=1
+  local slmenu=1
+  while true; do
+    case "$1" in
+      --default=yes) shift;;
+      --default=no)  shift; default=1;;
+      --no-slmenu)   shift; slmenu=0;;
+      --no-fzf)      shift; fzf=0;;
+      --*)           error 1 "asking: unexpected option argument $1";;
+      *)             break;;
+    esac
+  done
+  if (( default_no )); then
+    local prompt_answer='y/N'
+    local prompt_answer_lines="$(printf 'No\nYes\n')"
+  else
+    local prompt_answer='Y/n'
+    local prompt_answer_lines="$(printf 'Yes\nNo\n')"
+  fi
+  printf '\a'
+  if (( slmenu )) && which slmenu >/dev/null 2>/dev/null; then
+    answer="$(slmenu -i -l 2 -p "$*" <<<"$prompt_answer_lines")"
+  elif (( fzf )) && which fzf >/dev/null 2>/dev/null; then
+    answer="$(fzf -1 --prompt="$* " <<<"$prompt_answer_lines")"
+  else
+    read -p "$* ($prompt_answer)" answer
+  fi
+
+  case "$answer" in
+    n|N|no|NO|No|nO) return 1;;
+    y|Y|yes|YES|Yes|YEs|YeS|yES|yeS|yEs) return 0;;
+    *) return $default;;
+  esac
+}
+
+check-positive-asking(){
+  while asking "$@"; do
+    echo "Good you can try another option or hit the opposite to leave this loop"
+  done
+  echo "You left the loop by typing the opposite, right?"
+}
+
+check-negative-asking(){
+  while true; do
+    if asking "$@"; then
+      break
+    else
+      echo "Good you can try another option or hit the opposite to leave this loop"
+    fi
+  done
+  echo "You left the loop by typing the opposite, right?"
+}
+
+check-asking(){
+  check-positive-asking 'hit y|Y|yes|YES|Yes|YEs|YeS|yES|yeS|yEs|nothing|garbage and hit RETURN'
+  check-negative-asking 'hit n|N|no|NO|No|nO and hit RETURN'
+
+  check-positive-asking --default=no 'hit y|Y|yes|YES|Yes|YEs|YeS|yES|yeS|yEs and hit RETURN'
+  check-negative-asking --default=no 'hit n|N|no|NO|No|nO|nothing|garbage and hit RETURN'
+}
+# }}}
+
+null(){
+  [ $# = 0 ]
+}
+
+color(){
+  (( colored )) || return 0
+  col="$1"
+  shift
+  printf "\e[${col}m$@\e[m"
+}
+
+red(){    color '1;31' "$@"; }
+green(){  color '1;32' "$@"; }
+yellow(){ color '1;33' "$@"; }
+
+info(){
+  [ "$quiet" = -q ] || echo "$@" >>/dev/stderr
+}
+
+err(){
+  local exitcode="$1"
+  shift
+  info "$@"
+  exit "$exitcode"
+}
+
+warn(){
+  local exitcode="$1"
+  shift
+  if (( auto )); then
+    info "$(red WARN)" "$@"
+  else
+    err "$exitcode" "$(red FAIL)" "$@"
+  fi
+}
+
+git-cmp(){
+  [ $(git status --porcelain | wc -c) = 0 ]
+  # -q seems to inhibit the effect of --exit-code
+  # git diff --exit-code --name-only >/dev/null &&
+  # git diff --cached --exit-code --name-only >/dev/null
+}
+
+run(){
+  if [ "$quiet" = -q ]; then
+    "$@" >/dev/null 2>&1
+  else
+    "$@"
+  fi
+}
+
+push-branch(){
+  local b1="$1"
+  local b2="$2"
+  shift 2
+  # run is used here to force git push to be really quiet (git 1.7.4.1)
+  # actually git push no longer accept -q/--quiet
+  run git push "$@" "$origin" "$b1:refs/heads/$b2"
+}
+
+send-changes(){
+  info $(yellow "Sending local changes to $curbranch...")
+  push-branch "$curbranch" "$curbranch"
+}
+
+remove-branch(){
+  run git branch -d "$1"
+  git push $quiet $origin :refs/heads/"$1"
+}
+
+usage(){
+  err 1 "Usage: git-sync <option>*
+
+Options:
+
+-q | --quiet      Be quiet
+-a | --auto       Don't ask questions, don't fail
+-m | --merge      Merge (and remove) each diverged branch in turn
+     --no-color   Do not color output"
+}
+
+paths=( )
+for arg; do
+  case "$arg" in
+    -q|--quiet) quiet=-q;;
+    -a|--auto)  auto=1;;
+    --no-color) colored=0;;
+    -m|--merge) merge=1;;
+    -*) usage;;
+    *) paths=( "${paths[@]}" "$arg" );;
+  esac
+done
+
+(( merge && auto )) && err 1 "--merge and --auto are incompatible" || :
+
+if null "${paths[@]}"; then
+  paths=( . )
+fi
+
+info $(yellow "Pulling $origin...")
+
+if [ "$curbranch" = "$master" ]; then
+  git pull --ff-only $quiet $origin $master ||
+    git fetch $origin ||
+    warn 2 "Pull&fetch failed."
+else
+  warn 3 "Not on the $master branch."
+fi
+
+if (( merge )); then
+  git merge $quiet $origin/$master
+  if [ -d $GIT_DIR/refs/heads/$diverged ]; then
+    for braf in $(find $GIT_DIR/refs/heads/$diverged -type f | sort); do
+      bra=${braf/$GIT_DIR\/refs\/heads\//}
+      if git merge --ff-only $quiet "$bra"; then
+        remove-branch "$bra"
+      elif (( ! auto )) && asking "Branch $bra requires a merge. Merge now?"; then
+        git merge $quiet "$bra"
+        if git mergetool; then
+          remove-branch "$bra"
+        elif (( ! auto )) && asking "Interactive merge was not successful. Spawn shell ($SHELL)?"; then
+          $SHELL -i
+          if (( ! auto )) && asking "Do we remove the branch $bra?"; then
+            remove-branch "$bra"
+          fi
+        fi
+      fi
+    done
+  fi
+fi
+
+if git-cmp; then
+  info $(green "No local changes.")
+  [ $(git rev-parse "$curbranch") = $(git rev-parse "$origin/$curbranch") ] ||
+    push-branch "$curbranch" "$curbranch"
+  exit 0
+fi
+
+git add -A "${paths[@]}"
+  # The -A should cover the removed file, otherwise one can use:
+  # git ls-files --deleted -z | xargs --no-run-if-empty -0 git rm
+
+prefix=$diverged/$(date +%F-%Hh%Mm%Ss)
+
+[ "$curbranch" = "$master" ] || git checkout $quiet -b $prefix-tmp
+
+run git commit $quiet -m"$(git-describe-index)" "${paths[@]}"
+
+oldbranch="$curbranch"
+
+if [ "$curbranch" != "$master" ]; then
+  # NOTE that HEAD_hash is defined right here to get latest hash
+  HEAD_hash=$(git rev-parse -q --verify HEAD)
+  curbranch=$prefix-$HEAD_hash
+  git branch -m $prefix-tmp $curbranch
+fi
+
+send-changes
+
+case "$oldbranch" in
+  "$diverged"/*)
+    info "Removing the previous branch reference..."
+    remove-branch $oldbranch;;
+esac

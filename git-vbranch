@@ -1,0 +1,202 @@
+#!/bin/bash
+# Copyright (c) 2010, Nicolas Pouillard
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#
+#     * Redistributions in binary form must reproduce the above
+#       copyright notice, this list of conditions and the following
+#       disclaimer in the documentation and/or other materials provided
+#       with the distribution.
+#
+#     * Neither the name of the copyright holders nor the names of other
+#       contributors may be used to endorse or promote products derived
+#       from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+info() {
+  echo "$@" > /dev/stderr
+}
+
+err() {
+  echo "$@" > /dev/stderr
+}
+
+usage() {
+  cat > /dev/stderr <<EOS
+Usage: git vbranch (show|merge|create|reset) [<virtual-branch>]
+
+  # Purpose
+
+  'git vbranch' aims at dealing with your topic branches easily.
+
+  As a contributor to a project you may want to isolate each of your
+  contributions as what is called a topic branch. A topic branch is a short
+  living branch that fix a particular bug, add a specific feature, etc.  In
+  this situation you branch off master for each of your topics.  You propose
+  those topics to upstream, but in the mean time you may have to integrate
+  upstream changes, improve your topics, and enjoy having all your topics
+  merged in a big local branch of yours.  This script is about this last
+  branch that I personally name the "my" branch, and that we will call a
+  virtual branch.  This script helps to manage which topic branches are
+  behind a given virtual branch, and create/merge/reset this
+  virtual branch.
+
+  # Setup
+  git config virtual.<virtual-branch>.base <base-branch>
+  git config virtual.<virtual-branch>.topics <topics>
+  git config virtual.default <virtual-branch>
+
+  # Hint: Using a virtual.default configuration allows to omit
+  # the <virtual-branch> argument to vbranch commands.
+
+  # Setup Example
+  git config virtual.my.base master
+  git config virtual.my.topics topic1,topic2,bugfix3,feature4
+  git config virtual.default my
+
+  # Show details of a virtual branch (however 'git wtf' is much
+  # better at this (http://git-wt-commit.rubyforge.org/).
+  git vbranch show [<virtual-branch>]
+
+  # Merge in all the topic branches associated to this virtual branch
+  git vbranch merge [<virtual-branch>]
+
+  # Create the virtual branch and 'merge'
+  git vbranch create [<virtual-branch>]
+
+  # Hard reset the virtual branch to the base branch and 'merge'
+  git vbranch reset [<virtual-branch>]
+EOS
+  exit 1
+}
+
+cmd="$1"
+shift
+if [ -z "$cmd" ]; then
+  err "no command"
+  usage
+fi
+
+case "$1" in
+-*|"")
+  vbranch=$(git config virtual.default || :);;
+*)
+  vbranch="$1"
+  shift;;
+esac
+if [ -z "$vbranch" ]; then
+  err "No virtual branch name argument nor configuration value for virtual.default"
+  usage
+fi
+
+base=$(git config virtual."$vbranch".base)
+if [ -z "$base" ]; then
+  err "Virtual branch $vbranch not configured."
+  err "Configuration option virtual.$vbranch.base is empty"
+  exit 1
+fi
+
+topics=$(git config virtual."$vbranch".topics)
+if [ -z "$topics" ]; then
+  err "Virtual branch $vbranch not configured."
+  err "Configuration option virtual.$vbranch.topics is empty"
+  exit 1
+fi
+
+basehash=$(git show-ref -s heads/$base)
+if [ -z "$basehash" ]; then
+  err "The base branch ('$base') of '$vbranch' should exists."
+  exit 1
+fi
+
+domerge() {
+  info "Merging all the topics to branch '$vbranch'..."
+
+  # Three ways of doing it... Choose!
+  # 1/
+  echo -n "$topics" | xargs -d, git merge
+
+  # 2/
+  #echo -n "$topics" | xargs -d, -n 1 -I '{}' sequence figlet {} \; git merge {}
+
+  # 3/
+  #for topic in $(echo -n "$topics" | xargs -d, echo); do
+  #  git merge "$topic" || exit 1
+  #done
+}
+
+create() {
+  vbranchhash=$(git show-ref -s heads/$vbranch)
+  if [ -z "$vbranchhash" ]; then
+    info "Making and checking out the virtual branch..."
+    git checkout -b "$vbranch" "$base" || exit 1
+    domerge "$@"
+  else
+    err "The branch $vbranch already exists, use 'vbranch reset' to overwrite it."
+    exit 1
+  fi
+}
+
+merge() {
+  vbranchhash=$(git show-ref -s heads/$vbranch)
+  if [ -z "$vbranchhash" ]; then
+    err "The branch $vbranch does not exists, use 'vbranch create' to create it."
+  else
+    git checkout "$vbranch" || exit 1
+    domerge "$@"
+  fi
+}
+
+reset() {
+  vbranchhash=$(git show-ref -s heads/$vbranch)
+  if [ -z "$vbranchhash" ]; then
+    err "The branch $vbranch does not exists, use 'vbranch create' to create it."
+  else
+    info "Reseting the virtual branch..."
+    git checkout "$vbranch" || exit 1
+    git reset --hard "$base" || exit 1
+    domerge "$@"
+  fi
+}
+
+no_more_args() {
+  if [ $# != 0 ]; then
+    err "No more arguments expected"
+    usage
+  fi
+}
+
+case "$cmd" in
+create|c|cr|cre|crea|creat)
+  create "$@";;
+merge|m|me|mer|merg|merge)
+  merge "$@";;
+reset|rese|res|re|r)
+  reset "$@";;
+show)
+  no_more_args "$@"
+  echo "=== Virtual branch '$vbranch' ==="
+  echo "Base branch:"
+  echo "* $base"
+  echo "Topic branches:"
+  echo -n "$topics" | xargs -d, -n 1 echo '*' ;;
+*)
+  usage;;
+esac

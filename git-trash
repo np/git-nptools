@@ -1,0 +1,76 @@
+#!/bin/bash
+set -e
+
+gitshsetup="$(dirname "$(dirname "$(readlink "$(which git)")")")"/libexec/git-core/git-sh-setup
+
+if [ ! -e "$gitshsetup" ]; then
+  echo "Could not access $gitshsetup" >>/dev/stderr
+  exit 1
+fi
+
+SUBDIRECTORY_OK=YES . "$gitshsetup"
+
+GIT_TRASH_FILE="$GIT_DIR"/trash.idx
+remotes=(origin)
+files=("$@")
+
+[ -n "$GIT_DIR" ] || die "GIT_DIR is not defined"
+[ -e "$GIT_DIR" ] || die "$GIT_DIR does not exists"
+[ ! -e "$GIT_TRASH_FILE" ] ||
+   { cat <<EOF
+$GIT_TRASH_FILE already exists. Check that not other instance of git-trash is
+running. It might also be the case that this file is used by another program
+or that git-trash died without cleaning this file away.
+EOF
+     exit 1
+   }
+
+intrash(){
+  GIT_INDEX_FILE="$GIT_TRASH_FILE" "$@"
+}
+
+# Create an empty branch called 'trash' (no files except one called README.git-trash)
+# if no such branch exists.
+if git rev-parse -q --verify refs/heads/trash; then
+  # The trash branch exists locally: nothing to do
+  :
+else
+  # Check all remotes for a trash branch
+  for r in "${remotes[@]}"; do
+    if git rev-parse -q --verify "$r"/trash; then
+      # This remote has a trash branch: link it
+      git update-ref refs/heads/trash "$r"/trash
+      break
+    fi
+  done
+  if git rev-parse -q --verify refs/heads/trash; then
+    # We now have a local trash branch
+    :
+  else
+    # Creating a new trash branch.
+    intrash git read-tree --empty
+    cat >README.git-trash <<EOF
+This branch is managed using git-trash.
+EOF
+    intrash git add README.git-trash
+    tree=$(intrash git write-tree)
+    head=$(echo "Initialize trash" | intrash git commit-tree "$tree")
+    git update-ref refs/heads/trash "$head"
+  fi
+fi
+
+msg='Put some files to the trash branch'
+
+intrash git read-tree refs/heads/trash
+intrash git add "${files[@]}"
+tree=$(intrash git write-tree)
+head=$(echo "$msg" | intrash git commit-tree "$tree" -p refs/heads/trash)
+rm $GIT_TRASH_FILE
+git update-ref refs/heads/trash "$head"
+if git rm "${files[@]}"; then
+  git commit -m"$msg" "${files[@]}"
+else
+  echo "Fail: git rm ${files[@]}" >>/dev/stderr
+  echo "The files are already in the trash branch, so they can safely be removed from here." >>/dev/stderr
+  exit 1
+fi

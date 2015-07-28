@@ -1,0 +1,30 @@
+#!/bin/bash -e
+run(){
+  echo "$@"
+  "$@"
+}
+if [ $# = 0 ]; then
+  echo "Usage: git-stash-on <remote> [<message>]"
+  echo "Too few arguments"
+  exit 1
+fi
+on="$1"
+shift
+# XXX unescaped regexp
+if git remote | grep -q "^$on\$"; then
+  :
+else
+  echo "No such remote $on"
+  exit 1
+fi
+run git stash save "$@"
+if run git push "$on" refs/stash:refs/heads/stash/$(date +%F-%s); then
+  run git stash pop
+  echo "Success"
+else
+  if run git stash pop; then
+    echo "Failed (but restored everything)"
+  else
+    echo "Failed (and git stash pop failed as well)"
+  fi
+fi

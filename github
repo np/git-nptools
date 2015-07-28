@@ -1,0 +1,78 @@
+#!/bin/bash -eu
+HUB=$HOME/hub
+GITHUB_LOGIN="${GITHUB_LOGIN:-$LOGNAME}"
+normgithuburl(){
+  local err="$1"
+  local url="$2"
+  case $url in
+    (*hub:*) : ;;
+    (*https://github.com/*) url=$(sed -Ee 's|https://github.com/|hub:|' <<<"$url");;
+    (*http://github.com/*) url=$(sed -Ee 's|http://github.com/|hub:|' <<<"$url");;
+    (*git://github.com/*) url=$(sed -Ee 's|git://github.com/|hub:|' <<<"$url");;
+    (*git@github.com:*) url=$(sed -Ee 's|git@github.com:|hub:|' <<<"$url");;
+    (*/*) url=hub:"$url";;
+    ('') echo "$err" >>/dev/stderr
+      return 0;;
+    (*) echo Skipping $url: not a github repo >>/dev/stderr
+      return 0;;
+  esac
+  url=$(sed -Ee 's/\/?(\.git)?$//' <<<"$url")
+  sed -Ee 's/^hub:([a-zA-Z0-9_.-]*\/[a-zA-Z0-9_.-]*)$/\1/' <<<"$url"
+}
+normgithubrepo(){
+  local dir="$1"
+  local remote="${2:-${REMOTE:-origin}}"
+  pushd "$dir" >>/dev/null
+  local url=$(git config remote.$remote.url)
+  popd >>/dev/null
+  normgithuburl "No remote called $remote for $dir" "$url"
+}
+
+movegithubrepos(){
+  for srcdir; do
+    local hubid=$(normgithubrepo "$srcdir")
+    local dstdir=$HUB/$hubid
+    local login=$(dirname "$hubid")
+    local repo=$(basename "$hubid")
+    echo Moving $hubid...
+    if (( !DRY_RUN )); then
+      mkdir -p $(dirname $dstdir)
+      mkdir -p $HUB/repos/$repo
+      echo ln -s $dstdir $HUB/repos/$repo/$login
+      ln -s $dstdir $HUB/repos/$repo/$login
+      mv $srcdir $dstdir
+    fi
+  done
+}
+
+movegithubreposhere(){
+  movegithubrepos `git-repos -- pwd`
+}
+
+expandedrepo(){
+  #case "$1" in
+  #  ()
+  #esac
+  echo "$GITHUB_LOGIN/$1"
+}
+
+githubclone(){
+  cd $HOME/hub/tmp
+  for arg; do
+    repo="hub:$(normgithuburl "No repo $arg" "$arg")"
+    echo "Cloning $repo..." >>/dev/stderr
+    git clone "$repo"
+    local dir="${repo#hub:}"
+    movegithubrepos "$(basename "$dir")"
+    pushd "$HOME/hub/$dir" >>/dev/null
+    mr register
+    popd >>/dev/null
+  done
+  echo 'Review ~/.mrconfig...' >>/dev/stderr
+}
+
+case "$1" in
+  (move-repos) shift; movegithubreposhere "$@";;
+  (clone)      shift; githubclone "$@";;
+  (*)          echo "Unexpected argument $1" >>/dev/stderr; exit 1;;
+esac
