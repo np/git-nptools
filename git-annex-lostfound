@@ -1,0 +1,21 @@
+#!/bin/bash -ue
+dir="${1:-git-annex-lost+found}"
+if [ -e "$dir" ]; then
+  echo "$dir aleady exists!" >>/dev/stderr
+  exit 1
+fi
+rm .git/annex/unused .git/annex/tmpunused .git/annex/badunused
+git annex unused >/dev/null
+i=0
+for u in unused tmpunused badunused; do
+  for k in $(cut -d' ' -f2 .git/annex/$u); do
+    i=$((i + 1))
+    mkdir -p "$dir/$u"
+    git annex fromkey "$k" "$dir/$i-$u"
+  done
+done
+if (( i )); then
+  echo "Have a look to $dir/"
+else
+  echo No unused files
+fi
