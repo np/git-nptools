@@ -1,9 +1,9 @@
 #!/bin/bash -ue
 files=( $(git status --porcelain | grep '^[^ ?]. ' | awk '{print $2}') )
 case "${#files}" in
-  0) echo "No changes";;
-  1) echo "${files[@]}";;
-  *)
+  (0) echo "No changes";;
+  (1) echo "${files[@]}";;
+  (*)
     echo -n "${files[@]}" | head -c 70
     echo ...;;
 esac
