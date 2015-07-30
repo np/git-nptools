@@ -1,0 +1,139 @@
+#!/bin/bash
+# assumes +e (not -e)
+
+# error() @ https://gist.github.com/np/3736727#file-error-sh {{{
+# Takes an exit code and a message, prints the message and then exits
+error(){
+  local code="$1"
+  shift
+  echo "error: $@" >>/dev/stderr
+  exit "$code"
+}
+# }}}
+
+# asking() @ https://gist.github.com/np/5107721#file-asking-sh {{{
+# Dependencies:
+#   error() @ https://gist.github.com/np/3736727#file-error-sh
+# Options:
+#   --default=no  Makes No being the default (--default=yes is the default)
+#   --no-slmenu   Do no use slmenu even if available
+# Examples:
+#   asking 'Something failed, do you still want to continue?'
+#   asking --default=yes 'Next step?'
+asking(){
+  local default_no=0
+  local fzf=1
+  local slmenu=1
+  while true; do
+    case "$1" in
+      --default=yes) shift;;
+      --default=no)  shift; default=1;;
+      --no-slmenu)   shift; slmenu=0;;
+      --no-fzf)      shift; fzf=0;;
+      --*)           error 1 "asking: unexpected option argument $1";;
+      *)             break;;
+    esac
+  done
+  if (( default_no )); then
+    local prompt_answer='y/N'
+    local prompt_answer_lines="$(printf 'No\nYes\n')"
+  else
+    local prompt_answer='Y/n'
+    local prompt_answer_lines="$(printf 'Yes\nNo\n')"
+  fi
+  printf '\a'
+  if (( slmenu )) && which slmenu >/dev/null 2>/dev/null; then
+    answer="$(slmenu -i -l 2 -p "$*" <<<"$prompt_answer_lines")"
+  elif (( fzf )) && which fzf >/dev/null 2>/dev/null; then
+    answer="$(fzf -1 --prompt="$* " <<<"$prompt_answer_lines")"
+  else
+    read -p "$* ($prompt_answer)" answer
+  fi
+
+  case "$answer" in
+    n|N|no|NO|No|nO) return 1;;
+    y|Y|yes|YES|Yes|YEs|YeS|yES|yeS|yEs) return 0;;
+    *) return $default;;
+  esac
+}
+
+check-positive-asking(){
+  while asking "$@"; do
+    echo "Good you can try another option or hit the opposite to leave this loop"
+  done
+  echo "You left the loop by typing the opposite, right?"
+}
+
+check-negative-asking(){
+  while true; do
+    if asking "$@"; then
+      break
+    else
+      echo "Good you can try another option or hit the opposite to leave this loop"
+    fi
+  done
+  echo "You left the loop by typing the opposite, right?"
+}
+
+check-asking(){
+  check-positive-asking 'hit y|Y|yes|YES|Yes|YEs|YeS|yES|yeS|yEs|nothing|garbage and hit RETURN'
+  check-negative-asking 'hit n|N|no|NO|No|nO and hit RETURN'
+
+  check-positive-asking --default=no 'hit y|Y|yes|YES|Yes|YEs|YeS|yES|yeS|yEs and hit RETURN'
+  check-negative-asking --default=no 'hit n|N|no|NO|No|nO|nothing|garbage and hit RETURN'
+}
+# }}}
+
+gitshsetup="$(dirname "$(dirname "$(readlink "$(which git)")")")"/libexec/git-core/git-sh-setup
+
+[ -e "$gitshsetup" ] ||
+  error 1 "Could not access $gitshsetup"
+
+SUBDIRECTORY_OK=YES . $gitshsetup
+
+# assumes +e (not -e)
+gitpopulate() {
+  if [ $# = 1 ]; then
+    msg="$1"
+  else
+    all_new_files=1
+    for i; do
+      git ls-files --error-unmatch "$i" >/dev/null 2>/dev/null
+      [ "$all_new_files" -a "$?" ]
+      all_new_files=$?
+    done
+    if (( all_new_files )); then
+      msg="New files"
+    else
+      if [ $# = 2 ]; then
+        msg="Changes in $1 and $2"
+      else
+        msg="Changes in $1, $2..."
+      fi
+    fi
+  fi
+  git add "$@" || exit 2
+  git commit -m"$msg" -o -- "$@"
+  if asking "Push?"; then
+    git push || exit 4
+  fi
+}
+
+st=$(git status --porcelain 2>/dev/null)
+if [ $# = 0 ]; then
+  untracked=$(echo "$st" | grep '^??' | cut -d' ' -f2)
+
+  # select
+  toadd=()
+  for i in $untracked; do
+    if asking "Do you want to add this file ($i)?"; then
+      toadd=("${toadd[@]}" "$i")
+    fi
+  done
+
+  if asking "Commit?"; then
+    gitpopulate "${toadd[@]}"
+  fi
+else
+  gitpopulate "$@"
+fi
