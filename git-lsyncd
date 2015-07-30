@@ -1,0 +1,54 @@
+#!/bin/bash -eu
+
+[ -d "$1" ] || exit 1
+dir=`cd "$1" && pwd`
+shift
+
+if [ "$1" = -nodaemon ]; then
+  nodaemon=true
+  shift
+else
+  nodaemon=false
+fi
+
+if [ $# != 0 ]; then
+  echo "Unexpected arguments: $@" >>/dev/stderr
+  exit 2
+fi
+
+# since we inject dir into Lua, we take a few precautions.
+case "$dir" in
+*'"'*) exit 3;;
+*\\*) exit 4;;
+esac
+
+pid="$dir"/.git/lsyncd.pid
+log="$dir"/.git/lsyncd.log
+conf="$dir"/.git/lsyncd.conf
+
+cat >"$conf" <<EOF
+settings = {
+  statusInterval  = 1,
+  nodaemon        = $nodaemon,
+}
+
+gitsync    = "cd ^source; [ -e .git/nosync ] || git-sync -q -a"
+gitsync_on = gitsync -- ..[[ .^path]]
+
+gitsyncconf = {
+  delay        = 3,
+  maxProcesses = 1,
+  onStartup    = gitsync,
+  onCreate     = gitsync_on,
+  onModify     = gitsync_on,
+  onDelete     = gitsync_on,
+  onAttrib     = gitsync_on,
+  onMove       = gitsync_on,
+}
+
+sync{gitsyncconf, source="$dir", exclude={".git"}}
+EOF
+
+# NP: This exec seems to not do its job when I look at the processes with
+# htop, strange...
+exec /usr/bin/lsyncd -log scarce -pidfile "$pid" -logfile "$log" "$conf"
