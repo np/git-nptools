@@ -1,4 +1,19 @@
-#!/bin/bash -ue
+#!/bin/bash -e
+usage(){
+  echo "Usage: git-describe-index [<INDEX_FILE>]" >>/dev/stderr
+  exit 1
+}
+case "$#" in
+  (0) ;;
+  (1)
+    if [ -e "$1" ]; then
+      export GIT_INDEX_FILE="$1"
+    else
+      usage
+    fi
+    ;;
+  (*) usage;;
+esac
 files=( $(git status --porcelain | grep '^[^ ?]. ' | awk '{print $2}') )
 case "${#files}" in
   (0) echo "No changes";;
