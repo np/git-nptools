@@ -1,0 +1,121 @@
+#!/bin/bash -e
+
+gitshsetup="$(dirname "$(dirname "$(readlink "$(which git)")")")"/libexec/git-core/git-sh-setup
+me=git-record
+
+if [ ! -e "$gitshsetup" ]; then
+  echo "Could not access $gitshsetup" >>/dev/stderr
+  exit 1
+fi
+
+SUBDIRECTORY_OK=YES . "$gitshsetup"
+
+separate_index=1
+GIT_RECORD_FILE="$GIT_DIR"/record.idx
+
+[ -n "$GIT_DIR" ] || die "GIT_DIR is not defined"
+[ -e "$GIT_DIR" ] || die "$GIT_DIR does not exists"
+[ ! -e "$GIT_RECORD_FILE" ] ||
+   die "
+$GIT_RECORD_FILE already exists. Check that not other instance of $me is
+running. It might also be the case that this file is used by another program
+or that $me died without cleaning this file away.
+"
+
+inrecord(){
+  if (( separate_index )); then
+    GIT_INDEX_FILE="$GIT_RECORD_FILE" "$@"
+  else
+    "$@"
+  fi
+}
+
+commitopts=()
+addopts=()
+files=()
+while [ -n "$1" ]; do
+  case "$1" in
+    (--staged) separate_index=0;;
+    (--dry-run|-v|--verbose|-e|--edit|--interactive|--all)
+      commitopts=("${commitopts[@]}" "$1")
+      addopts=("${addopts[@]}" "$1");;
+    (-a|-s|--signoff|-q|--quiet|-u*|--untracked-files=*|--amend|--reset-author|--allow-empty|-n|--no-verify|--authors=*|--date=*|--cleanup=*|--status|--no-status|--short|--porcelain|-z|--file=*|--template=*)
+      commitopts=("${commitopts[@]}" "$1");;
+    # ignoring -i/-o
+    (-c|-C|-F|-m|--authors|--date|--cleanup|-t|--template|--file|--untracked-files)
+      commitopts=("${commitopts[@]}" "$1" "$2")
+      shift;;
+    # ignored 'git add' options:
+    # -n|-i|-u
+    (-f|--force|-p|--update|-A|-N|--intent-to-add|--refresh|--ignore-errors)
+      addopts=("${addopts[@]}" "$1");;
+    (-*)
+      die "Unexpected option $1";;
+    (*)
+      files=("${files[@]}" "$1");;
+  esac
+  shift
+done
+
+bak=()
+
+(( ! separate_index )) || inrecord git reset -q --mixed HEAD
+
+if [ "${#files}" = 0 ]; then
+  files=( $(git status --porcelain | awk '{print $2}') )
+fi
+
+clean(){
+  rm -f "$GIT_RECORD_FILE"
+  exit 0
+}
+
+add(){
+  inrecord git add -N "${addopts[@]}" -- "$@"
+  inrecord git add -p "${addopts[@]}" -- "$@"
+  (( ! separate_index )) || git update-index --add "$@"
+}
+
+commit(){
+  inrecord git commit -v "${commitopts[@]}" || :
+  clean
+}
+
+next(){
+  bak=("${files[0]}" "${bak[@]}")
+  files=("${files[@]:1}")
+}
+
+prev(){
+  files=("${bak[0]}" "${files[@]}")
+  bak=("${bak[@]:1}")
+}
+
+menu(){
+  read -p "Shall we record the file \`$file' [y,n,a,k,d,q,?]? " answer
+  case "$answer" in
+    (n|N) next ;;
+    (y|Y) add "$file"; next ;;
+    (a|A) add "${files[@]}"; commit ;;
+    (k|K) prev ;;
+    (d|D) commit ;;
+    (q|Q) clean ;;
+    (*)
+      cat >>/dev/stderr <<EOF
+n: Skip this file
+y: Add/update the content of this file incrementally
+a: Add/update all files, then commit
+k: Back to the previous file
+d: Done with file selection, commit now
+q: Quit
+EOF
+      menu
+      ;;
+  esac
+}
+
+while [ "${#files}" -gt 0 ]; do
+  file="${files[0]}"
+  menu
+done
+commit
