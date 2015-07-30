@@ -1,0 +1,81 @@
+#!/bin/bash -uex
+
+err(){
+  local code="$1"
+  shift
+  echo "$@" >>/dev/stderr
+  exit "$code"
+}
+
+usage(){
+  echo "Usage: git cut-history [--env] --step <1|2|3>">>/dev/stderr
+  echo "IMPORTANT: you should run --step 1 on only one repository!">>/dev/stderr
+  echo "So 1,2,3 on the first and 2,3 on the others.">>/dev/stderr
+  err 1 "$@"
+}
+
+date=$(date +%F)
+
+# default values
+origin=origin
+master=master
+message=re-init
+old=old-$date
+new=new-$date
+step=
+
+while [ $# != 0 ]; do
+  case "$1" in
+  --env)
+    shift
+    origin="${ORIGIN:-$origin}"
+    master="${MASTER:-$master}"
+    message="${MESSAGE:-$message}"
+    ;;
+  --step)
+    shift
+    step="$1"
+    shift
+    ;;
+  *) usage "Unexpected argument $1";;
+  esac
+done
+
+git checkout "$master"
+
+case "$step" in
+1)
+  git pull "$origin"
+  git checkout --orphan $new
+  git commit -m "$message"
+  git push "$origin" "$master":refs/heads/$old
+  git push -f "$origin" $new:refs/heads/"$master"
+  git checkout "$master"
+  ;;
+2)
+  test -z "$(git status -s)"  || err 1 "\`git status -s' should be empty"
+  git pull "$origin"
+  git reset --hard "$origin/$master"
+  ;;
+3)
+  test -z "$(git stash list)"        || err 1 "\`git stash list' should be empty"
+  test "$(git branch)" = "* $master" || err 1 "\`git branch' should contain only master"
+  git update-ref -d refs/remotes/"$origin/$old"
+  git update-ref -d refs/stash
+  git remote prune "$origin"
+  git reflog expire --expire=$date --all
+  git gc --aggressive --prune=$date
+  # if git gc didn't cleaned enough:
+  #  git show-ref
+  #  git reflog
+  ;;
+bare-3)
+  test "$(git config core.bare)" true || err 1 "A bare repository was expected"
+  git branch -D $old
+  test "$(git branch)" = "* $master" || err 1 "\`git branch' should contain only master"
+  git gc --aggressive --prune=$date
+  ;;
+*)
+  err 1 "Unexpected value for --step. Expecting 1, 2, or 3"
+  ;;
+esac
