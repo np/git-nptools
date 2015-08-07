@@ -1,5 +1,6 @@
 #!/bin/bash -eu
 HUB=$HOME/hub
+DRY_RUN="${DRY_RUN:-0}"
 GITHUB_LOGIN="${GITHUB_LOGIN:-$LOGNAME}"
 normgithuburl(){
   local err="$1"
